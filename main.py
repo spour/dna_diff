@@ -7,7 +7,7 @@ from dna_diffusion.model import DiffusionModel
 from dna_diffusion.train import train, train_progressive
 from dna_diffusion.sample import sample
 from dna_diffusion.utils import decode_sequences, one_hot_encode
-from dna_diffusion.data_generator import DummyDataGenerator, DummyMotifCounter, DummyPWMScorer
+from dna_diffusion.data_generator import DummyDataGenerator, DummyMotifCounter, DummyPWMScorer, BEDFileDataGenerator
 from dna_diffusion.interpret import DiffusionModelInterpreter
 import torch
 import torch.optim as optim
@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.nn.utils.rnn import pad_sequence
+import pyfaidx
 
 def collate_fn(batch):
     sequences, scores = zip(*batch) 
@@ -25,6 +26,10 @@ def collate_fn(batch):
     scores = torch.stack(scores) 
 
     return padded_sequences, scores
+
+def reverse_complement(seq):
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return ''.join([complement[base] for base in reversed(seq)])
 
 def main():
     # dummy data generator
@@ -35,7 +40,7 @@ def main():
         'G': [0.2, 0.1, 0.1, 0.1, 0.1],
         'T': [0.1, 0.1, 0.1, 0.0, 0.0]
     }
-    MODE = "PROGRESSIVE"
+    MODE = "NOT PROGRESSIVE"
     num_sequences = 5000  
     sequence_length = 90  
     # data_generator = DummyDataGenerator(num_sequences, sequence_length)
@@ -49,11 +54,21 @@ def main():
     data_generator2 = DummyPWMScorer(num_sequences, sequence_length2, pwm=PWM)
     dataframe2 = data_generator2.data
     
-    dataframe = pd.concat([dataframe, dataframe2], ignore_index=True)   
+    dataframe = pd.concat([dataframe, dataframe2], ignore_index=True) 
+     
+    # bed version 
+    dataframe = pd.read_csv('/project/6000369/spour98/ledidi/data/ENCFF612ZUY.bedout', sep='\t', header=None)
+    # dataframe = dataframe[[4, 10]]
+    # dataframe = dataframe.rename(columns={4: 'scores', 10: 'sequences'})
+    # # sequences to uppercase
+    # dataframe['sequences'] = dataframe['sequences'].str.upper()
+    # using BEDFileDataGenerator
+    data_generator = BEDFileDataGenerator('/project/6000369/spour98/ledidi/data/ENCFF612ZUY.bedout', 10000)
+    dataframe = data_generator.data
     num_classes = 4
     hidden_size = 128
     T = 100
-    epochs = 5
+    epochs = 2
     sequences = dataframe['sequences'].values
     scores = dataframe['scores'].values
     # model and diffusion
@@ -88,7 +103,7 @@ def main():
         print(seq)
         print(f"GC content: {seq.count('G') + seq.count('C')}/{len(seq)}")
         print(f"Motif count: {seq.count(MOTIF) / (len(seq) -  len(MOTIF) + 1)}")
-        print(f"Score: {data_generator.score_sequence(seq)}")
+        # print(f"Score: {data_generator.score_sequence(seq)}")
     
     # random sequence
     random_onehot = torch.randint(0, 4, (1, seq_len), device=device)
@@ -138,16 +153,30 @@ def main():
     
     # interpret
 
-    # breakpoint()
+    breakpoint()
     interpreter = DiffusionModelInterpreter(model, diffusion, data_generator, device=device)
-    desired_scores = torch.tensor([0.1, 0.3, 0.6, 1.0], device=device)  # Define desired scores
-    generated_df = interpreter.generate_sequences(desired_scores, 20, num_samples=len(desired_scores))
+    desired_scores = torch.tensor([0.0, 0.3, 0.6, 1.0], device=device)  # Define desired scores
+    # 10 sequences of score 1000
+    # desired_scores = torch.tensor([100.0], device=device) * torch.ones(10, device=device)
+    generated_df = interpreter.generate_sequences(desired_scores, 100, num_samples=len(desired_scores))
+    # count CCA**AGGGGGCG in generated sequences USING COUNT
+    # generated_df['MOTIF_count'] = generated_df['Sequence'].apply(lambda x: len(re.findall('GGGGG', x)))
+    # dataframe['CCAC count'] = dataframe['sequences'].apply(lambda x: len(re.findall('GGGGG', x)))
     print("Generated Sequences and Analysis:")
     print(generated_df)
-    
-    example_sequence = dataframe['sequences'].iloc[0]  # Example sequence from dataset
+    import grelu.interpret.motifs
+    comparison = grelu.interpret.motifs.compare_motifs(
+        ref_seq = generated_df["Sequence"][0],
+        alt_seq = generated_df["Sequence"].tolist()[-1],
+        motifs="consensus",
+        pthresh=5e-5,
+        rc=True, # Scan both strands of the sequence
+    )
+    comparison[comparison["motif"].str.contains("CTCF")]
+    breakpoint()
+    example_sequence = dataframe['sequences'].iloc[-1]  # Example sequence from dataset
     example_encoded = one_hot_encode([example_sequence], len(example_sequence))[0]
-    interpreter.visualize_gradients(example_encoded, t=50, score=1.0)  # Example t and score
+    interpreter.visualize_gradients(example_encoded, t=5, score=1.0)  # Example t and score
 
     # selc ondition
     output_no_self_cond, output_with_self_cond = interpreter.interpret_self_conditioning_effect(example_encoded, t=50, score=0.5)

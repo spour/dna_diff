@@ -7,13 +7,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from vizsequence.viz_sequence import plot_weights
+from dna_diffusion.sample import sample
 
 # import sample from ../diffusion/sample.py
-import sys
-sys.path.append('/home/spour98/projects/def-thughes/spour98/ledidi/ledidi/ledidi/dna_diffusion')
+# import sys
+# sys.path.append('/home/spour98/projects/def-thughes/spour98/ledidi/ledidi/ledidi/dna_diffusion')
 
-from sample import sample
-from utils import decode_sequences
+from dna_diffusion.utils import decode_sequences
 
 class DiffusionModelInterpreter:
     def __init__(self, model, diffusion, data_generator, device='cpu'):
@@ -25,13 +25,58 @@ class DiffusionModelInterpreter:
     def generate_sequences(self, desired_scores, seq_len, num_samples):
         """
         Generates sequences based on specified target scores, evaluates them, and decodes them.
-        """
-        generated_x0 = sample(self.model, self.diffusion, seq_len, desired_scores, self.device, num_samples=num_samples)
-        generated_sequences = decode_sequences(generated_x0.cpu())
         
-        # Analyze generated sequences for motifs, GC content, and scores
-        result_df = self.analyze_sequences(generated_sequences)
+        Parameters:
+        - desired_scores: List or array of target scores to condition the sequence generation on.
+        - seq_len: Length of the sequences to generate.
+        - num_samples: Number of sequences to generate per desired score.
+        
+        Returns:
+        - result_df: DataFrame containing the generated sequences and their associated analyses, including the desired score they correspond to.
+        """
+        # Initialize lists to store sequences and their corresponding scores
+        all_generated_sequences = []
+        all_scores = []
+
+        for score in desired_scores:
+            # Create a tensor of scores with shape [num_samples] or [num_samples, 1]
+            score_tensor = torch.full(
+                (num_samples,),  # Shape: [batch_size]
+                score,
+                dtype=torch.float,
+                device=self.device
+            )
+            # If your model expects [batch_size, 1], uncomment the next line
+            # score_tensor = score_tensor.unsqueeze(1)  # Shape: [batch_size, 1]
+            
+            # Generate sequences for each desired score
+            generated_x0 = sample(
+                # self.model,
+                self.diffusion,
+                seq_len,
+                score_tensor,  # Pass the score tensor with correct shape
+                self.device,
+                num_samples=num_samples
+            )
+            generated_sequences = decode_sequences(generated_x0.cpu())
+            all_generated_sequences.extend(generated_sequences)
+            all_scores.extend([score.cpu()] * len(generated_sequences))
+
+        # Analyze all generated sequences
+        result_df = self.analyze_sequences(all_generated_sequences)
+
+        # Ensure the length of all_scores matches result_df
+        if len(all_scores) != len(result_df):
+            raise ValueError(f"Length of scores ({len(all_scores)}) does not match length of result_df ({len(result_df)})")
+
+        # Add the 'desired_score' column to 'result_df'
+        result_df['desired_score'] = all_scores
+
         return result_df
+
+
+
+
 
     def analyze_sequences(self, sequences):
         """
@@ -43,13 +88,13 @@ class DiffusionModelInterpreter:
         for seq in sequences:
             gc_content = (seq.count("G") + seq.count("C")) / len(seq)
             motif_count = seq.count(self.data_generator.consensus) / (len(seq) - len(self.data_generator.consensus) + 1)
-            pwm_score = self.data_generator.score_sequence(seq)
+            # pwm_score = self.data_generator.score_sequence(seq)
 
             sequence_data.append({
                 'Sequence': seq,
                 'GC_Content': gc_content,
                 'Motif_Count': motif_count,
-                'PWM_Score': pwm_score
+                # 'PWM_Score': pwm_score
             })
         
         return pd.DataFrame(sequence_data)

@@ -28,38 +28,62 @@ class DummyDataGenerator:
         dataframe = pd.DataFrame({'sequences': sequences, 'scores': scores})
         return dataframe
 
+
+
 class DummyMotifCounter:
     def __init__(self, num_sequences, sequence_length, motif):
         self.num_sequences = num_sequences
         self.sequence_length = sequence_length
         self.motif = motif
         self.data = self.generate_data()
+        self.mean_score = self.data['scores'].mean()
+        self.std_score = self.data['scores'].std()
+        self.consensus = motif
         
     def generate_sequence(self):
-        # create distribution of sequences that have 0-3 motifs
-        num_motifs = np.random.choice([0, 0, 0, 10], p=[0.4, 0.3, 0.25, 0.05])
-        num_motifs = min(num_motifs, self.sequence_length // len(self.motif))
-        sequence = ''
-        for _ in range(num_motifs):
-            sequence += self.motif
-        sequence += ''.join(random.choices(['A', 'C', 'G', 'T'], k=self.sequence_length - len(sequence)))
-        return sequence
+        # Create a distribution of sequences with 0-3 motifs
+        num_motifs = np.random.choice([0, 1, 2, 3], p=[0.4, 0.3, 0.25, 0.05])
+        max_motifs = self.sequence_length // len(self.motif)
+        num_motifs = min(num_motifs, max_motifs)
+        
+        # Generate a random sequence initially
+        sequence = ''.join(random.choices(['A', 'C', 'G', 'T'], k=self.sequence_length))
+
+        # Insert the motif at random positions
+        positions = np.random.choice(
+            range(self.sequence_length - len(self.motif) + 1), 
+            num_motifs, 
+            replace=False
+        )
+        
+        sequence = list(sequence)
+        for pos in positions:
+            sequence[pos:pos + len(self.motif)] = list(self.motif)
+        
+        return ''.join(sequence)
     
     def count_motif(self, sequence, motif):
-        return sequence.count(motif) / (len(sequence) -  len(motif) + 1) 
+        # Count occurrences of motif normalized by possible placements
+        # return (sequence.count(motif) / (len(sequence) - len(motif) + 1)) 
+        return sequence.count(motif)
     
     def generate_data(self):
         sequences = []
         counts = []
+        
         for _ in range(self.num_sequences):
             seq = self.generate_sequence()
             count = self.count_motif(seq, self.motif)
             sequences.append(seq)
             counts.append(count)
+        
+        # Create DataFrame with sequences and motif counts as scores
         dataframe = pd.DataFrame({'sequences': sequences, 'scores': counts})
+        # dataframe['scores'] = (dataframe['scores'] - dataframe['scores'].min()) / (dataframe['scores'].max() - dataframe['scores'].min())
         return dataframe
+
     
-    
+        
 class DummyPWMScorer:
     def __init__(self, num_sequences, sequence_length, pwm):
         self.num_sequences = num_sequences
@@ -67,6 +91,8 @@ class DummyPWMScorer:
         self.pwm = pwm
         self.consensus = self.get_consensus_sequence()
         self.data = self.generate_data()
+        self.mean_score = self.data['scores'].mean()
+        self.std_score = self.data['scores'].std()
         
     def generate_sequence(self, p_match=0.4, p_mismatch=0.3, p_random=0.3):
         """Generate a sequence with varying probabilities for matching the consensus sequence,
@@ -129,3 +155,40 @@ class DummyPWMScorer:
         # normalize scores to be between 0 and 1
         dataframe['scores'] = (dataframe['scores'] - dataframe['scores'].min()) / (dataframe['scores'].max() - dataframe['scores'].min())
         return dataframe
+
+
+
+class BEDFileDataGenerator:
+    def __init__(self, filepath, num_sequences=None, maxlen=1000):
+        self.filepath = filepath
+        self.num_sequences = num_sequences
+        self.maxlen = maxlen
+        self.data = self.load_data()
+
+        # Compute mean and standard deviation of the scores
+        self.mean_score = self.data['scores'].mean()
+        self.std_score = self.data['scores'].std()
+
+        # Normalize the scores
+        self.data['scores'] = (self.data['scores'] - self.mean_score) / self.std_score
+        # self.data['scores'] = (self.data['scores'] - self.data['scores'].min()) / (self.data['scores'].max() - self.data['scores'].min())
+
+        # consensus is random for now
+        self.consensus = "".join(random.choices(['A', 'C', 'G', 'T'], k=10))
+    
+    def load_data(self):
+        """Loads sequence and score data from a BED file."""
+        dataframe = pd.read_csv(self.filepath, sep='\t', header=None)
+        # Filter sequences by length
+        dataframe = dataframe[dataframe[2] - dataframe[1] <= self.maxlen]
+        # Filter out sequences with Ns
+        dataframe = dataframe[~dataframe[10].str.contains('N')]
+        dataframe = dataframe[[6, 10]].sample(n=self.num_sequences)
+        dataframe.columns = ['scores', 'sequences']
+        dataframe['sequences'] = dataframe['sequences'].str.upper()
+        return dataframe
+    
+    # def score_sequence(self, sequence):
+    #     """Placeholder scoring function; extend as needed."""
+    #     # Assuming scores column contains the sequence scores
+    #     return np.random.choice(self.data['scores'])  # Modify scoring logic if necessary
